@@ -1,0 +1,78 @@
+{
+  "name": "commit-cop",
+  "displayName": "Commit Cop 🚔",
+  "description": "Aggressively enforces pre-commit hooks. You have the right to remain hooked.",
+  "version": "0.0.1",
+  "publisher": "commit-cop",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/commit-cop/commit-cop"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:.git"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "commit-cop.installHooks",
+        "title": "Commit Cop: Install Pre-Commit Hooks"
+      },
+      {
+        "command": "commit-cop.checkHooks",
+        "title": "Commit Cop: Check Hook Status"
+      }
+    ],
+    "configuration": {
+      "title": "Commit Cop",
+      "properties": {
+        "commitCop.hookCommand": {
+          "type": "string",
+          "default": "npx husky install",
+          "description": "Command to install pre-commit hooks"
+        },
+        "commitCop.aggressive": {
+          "type": "boolean",
+          "default": true,
+          "description": "Aggressively reinstall hooks on every workspace open"
+        },
+        "commitCop.watchHooks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Watch .git/hooks folder and reinstall if hooks are deleted"
+        },
+        "commitCop.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications when hooks are installed"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0",
+    "@vscode/vsce": "^2.19.0"
+  }
+}
