@@ -1,16 +1,42 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
-import { exec } from 'child_process';
 import { promisify } from 'util';
+import { exec } from 'child_process';
 
 const execAsync = promisify(exec);
+
+const getConfig = () => vscode.workspace.getConfiguration('commitCop');
+
+const getGitHooksPath = (folder: vscode.WorkspaceFolder) =>
+  vscode.Uri.joinPath(folder.uri, '.git', 'hooks');
+
+const getErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+const forEachGitFolder = async (
+  callback: (folder: vscode.WorkspaceFolder) => Promise<void>
+) => {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders) return;
+
+  await Promise.all(
+    folders.map(async (folder) => {
+      const gitPath = vscode.Uri.joinPath(folder.uri, '.git');
+      try {
+        await vscode.workspace.fs.stat(gitPath);
+        await callback(folder);
+      } catch {
+        return;
+      }
+    })
+  );
+};
+
+let watchers: vscode.FileSystemWatcher[] = [];
 
 export const activate = (context: vscode.ExtensionContext) => {
   console.log('🚔 Commit Cop is on patrol!');
 
-  const config = vscode.workspace.getConfiguration('commitCop');
-  const hookWatchers: vscode.FileSystemWatcher[] = [];
+  const config = getConfig();
 
   const installHooks = vscode.commands.registerCommand('commit-cop.installHooks', async () => {
     await installHooksInWorkspace();
@@ -30,33 +56,31 @@ export const activate = (context: vscode.ExtensionContext) => {
     watchGitHooks(context);
   }
 
-  vscode.workspace.onDidChangeWorkspaceFolders(() => {
-    if (config.get<boolean>('aggressive')) {
-      installHooksInWorkspace();
-    }
-    if (config.get<boolean>('watchHooks')) {
-      watchGitHooks(context);
-    }
-  });
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      const updatedConfig = getConfig();
+      if (updatedConfig.get<boolean>('aggressive')) {
+        installHooksInWorkspace();
+      }
+      if (updatedConfig.get<boolean>('watchHooks')) {
+        disposeWatchers();
+        watchGitHooks(context);
+      }
+    })
+  );
+};
+
+const disposeWatchers = () => {
+  watchers.forEach(watcher => watcher.dispose());
+  watchers = [];
 };
 
 const installHooksInWorkspace = async () => {
-  const config = vscode.workspace.getConfiguration('commitCop');
+  const config = getConfig();
   const hookCommand = config.get<string>('hookCommand') || 'npx husky install';
   const showNotifications = config.get<boolean>('showNotifications');
 
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders) {
-    return;
-  }
-
-  for (const folder of workspaceFolders) {
-    const gitPath = path.join(folder.uri.fsPath, '.git');
-
-    if (!fs.existsSync(gitPath)) {
-      continue;
-    }
-
+  await forEachGitFolder(async (folder) => {
     try {
       const { stdout, stderr } = await execAsync(hookCommand, {
         cwd: folder.uri.fsPath
@@ -73,42 +97,44 @@ const installHooksInWorkspace = async () => {
         console.error(`stderr: ${stderr}`);
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
       vscode.window.showWarningMessage(
-        `🚔 Commit Cop: Failed to install hooks in ${folder.name}: ${errorMessage}`
+        `🚔 Commit Cop: Failed to install hooks in ${folder.name}: ${getErrorMessage(error)}`
       );
       console.error(`Failed to install hooks:`, error);
     }
-  }
+  });
 };
 
 const checkHookStatus = async () => {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders) {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders) {
     vscode.window.showInformationMessage('🚔 No workspace folders found.');
     return;
   }
 
-  const results: string[] = [];
+  const results = await Promise.all(
+    folders.map(async (folder) => {
+      const hooksPath = getGitHooksPath(folder);
 
-  for (const folder of workspaceFolders) {
-    const hooksPath = path.join(folder.uri.fsPath, '.git', 'hooks');
+      try {
+        const entries = await vscode.workspace.fs.readDirectory(hooksPath);
+        const hookFiles = entries
+          .filter(([name, type]) =>
+            type === vscode.FileType.File &&
+            !name.endsWith('.sample') &&
+            name === 'pre-commit'
+          )
+          .map(([name]) => name);
 
-    if (!fs.existsSync(hooksPath)) {
-      results.push(`${folder.name}: ❌ No .git/hooks folder found`);
-      continue;
-    }
-
-    const hookFiles = fs.readdirSync(hooksPath).filter(file =>
-      !file.endsWith('.sample') && file.includes('pre-commit')
-    );
-
-    if (hookFiles.length > 0) {
-      results.push(`${folder.name}: ✅ Hooks found: ${hookFiles.join(', ')}`);
-    } else {
-      results.push(`${folder.name}: ⚠️ No pre-commit hooks found`);
-    }
-  }
+        if (hookFiles.length > 0) {
+          return `${folder.name}: ✅ Hooks found: ${hookFiles.join(', ')}`;
+        }
+        return `${folder.name}: ⚠️ No pre-commit hooks found`;
+      } catch {
+        return `${folder.name}: ❌ No .git/hooks folder found`;
+      }
+    })
+  );
 
   vscode.window.showInformationMessage(
     `🚔 Hook Status:\n${results.join('\n')}`
@@ -116,23 +142,15 @@ const checkHookStatus = async () => {
 };
 
 const watchGitHooks = (context: vscode.ExtensionContext) => {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders) {
-    return;
-  }
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders) return;
 
-  for (const folder of workspaceFolders) {
-    const hooksPath = path.join(folder.uri.fsPath, '.git', 'hooks');
-
-    if (!fs.existsSync(hooksPath)) {
-      continue;
-    }
-
+  folders.forEach((folder) => {
     const pattern = new vscode.RelativePattern(folder, '.git/hooks/**');
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
     watcher.onDidDelete(async (uri) => {
-      if (uri.fsPath.includes('pre-commit')) {
+      if (uri.fsPath.endsWith('/pre-commit') || uri.fsPath.endsWith('\\pre-commit')) {
         console.log(`🚔 Hook deleted detected: ${uri.fsPath}`);
         vscode.window.showWarningMessage(
           `🚔 Commit Cop: Pre-commit hook deleted! Reinstalling... You can't escape the law!`
@@ -142,9 +160,11 @@ const watchGitHooks = (context: vscode.ExtensionContext) => {
     });
 
     context.subscriptions.push(watcher);
-  }
+    watchers.push(watcher);
+  });
 };
 
 export const deactivate = () => {
+  disposeWatchers();
   console.log('🚔 Commit Cop is off duty.');
 };
