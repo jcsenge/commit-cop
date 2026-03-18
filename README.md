@@ -9,7 +9,7 @@ Auto-installs and watches your pre-commit hooks. Delete them? They come back. ðŸ
 ## Install
 
 ```bash
-git clone https://github.com/commit-cop/commit-cop.git
+git clone https://github.com/jcsenge/commit-cop.git
 cd commit-cop
 npm install && npm run compile && npm run package
 code --install-extension commit-cop-0.0.1.vsix
